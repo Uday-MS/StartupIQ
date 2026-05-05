@@ -5,3 +5,4 @@ __pycache__/
 .env
 startupiq.db
 *.sqlite3
+agent.md

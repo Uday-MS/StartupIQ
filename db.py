@@ -127,6 +127,7 @@ def get_pool():
             minconn=1,
             maxconn=10,
             dsn=DATABASE_URL,
+            sslmode="require"
         )
         print("✅ PostgreSQL connection pool created")
     return _pool
