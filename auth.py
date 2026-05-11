@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from db import get_conn, put_conn
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+BASE_URL = os.getenv("BASE_URL", "http://localhost:5000")
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -252,7 +253,7 @@ def google_login():
                     "client_secret": client_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": ["http://localhost:5000/auth/google/callback"],
+                    "redirect_uris": [f"{BASE_URL}/auth/google/callback"],
                 }
             },
             scopes=[
@@ -261,7 +262,7 @@ def google_login():
                 "https://www.googleapis.com/auth/userinfo.profile",
             ],
         )
-        flow.redirect_uri = "http://localhost:5000/auth/google/callback"
+        flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
 
         authorization_url, state = flow.authorization_url(
             access_type="offline",
@@ -308,7 +309,7 @@ def google_callback():
                     "client_secret": client_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": ["http://localhost:5000/auth/google/callback"],
+                    "redirect_uris": [f"{BASE_URL}/auth/google/callback"],
                 }
             },
             scopes=[
@@ -318,8 +319,7 @@ def google_callback():
             ],
             state=session.get("google_oauth_state"),
         )
-        flow.redirect_uri = "http://localhost:5000/auth/google/callback"
-
+        flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
         # Exchange the authorization code for tokens
         flow.fetch_token(authorization_response=request.url)
 
