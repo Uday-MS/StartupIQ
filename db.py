@@ -9,7 +9,10 @@ import sqlite3
 from datetime import datetime
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv()  # Safe for local + Render
+
+print("DATABASE_URL present:", bool(os.getenv("DATABASE_URL")))
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ---------------------------------------------------------------------------
