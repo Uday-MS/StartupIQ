@@ -263,6 +263,7 @@ def google_login():
             ],
         )
         flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
+        print("Redirect URI:", f"{BASE_URL}/auth/google/callback")
 
         authorization_url, state = flow.authorization_url(
             access_type="offline",
@@ -320,6 +321,7 @@ def google_callback():
             state=session.get("google_oauth_state"),
         )
         flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
+        print("Redirect URI:", f"{BASE_URL}/auth/google/callback")
         # Exchange the authorization code for tokens
         flow.fetch_token(authorization_response=request.url)
 
