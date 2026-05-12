@@ -261,8 +261,10 @@ def google_login():
                 "https://www.googleapis.com/auth/userinfo.email",
                 "https://www.googleapis.com/auth/userinfo.profile",
             ],
+            autogenerate_code_verifier=True,
         )
         flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
+        flow.code_verifier = session.get("code_verifier")
         print("Redirect URI:", f"{BASE_URL}/auth/google/callback")
 
         authorization_url, state = flow.authorization_url(
@@ -319,8 +321,10 @@ def google_callback():
                 "https://www.googleapis.com/auth/userinfo.profile",
             ],
             state=session.get("google_oauth_state"),
+            autogenerate_code_verifier=True,
         )
         flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
+        session["code_verifier"] = flow.code_verifier
         print("Redirect URI:", f"{BASE_URL}/auth/google/callback")
         # Exchange the authorization code for tokens
         flow.fetch_token(authorization_response=request.url)
