@@ -261,6 +261,7 @@ def google_login():
                 "https://www.googleapis.com/auth/userinfo.email",
                 "https://www.googleapis.com/auth/userinfo.profile",
             ],
+            code_verifier=None
             
         )
         flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
@@ -321,6 +322,7 @@ def google_callback():
                 "https://www.googleapis.com/auth/userinfo.profile",
             ],
             state=session.get("google_oauth_state"),
+            code_verifier=None
             
         )
         flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
