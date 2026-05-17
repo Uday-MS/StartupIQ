@@ -227,62 +227,57 @@ def auth_status():
 
 
 # =============================================================================
-# GOOGLE OAUTH — Real Implementation
+# GOOGLE OAUTH — Authlib Implementation (production-safe, no PKCE issues)
 # =============================================================================
+
+from authlib.integrations.flask_client import OAuth
+
+# OAuth instance — initialized lazily when blueprint is registered on the app
+_oauth = None
+
+
+def _get_oauth():
+    """Get or initialize the Authlib OAuth client (lazy singleton)."""
+    global _oauth
+    if _oauth is not None:
+        return _oauth
+
+    from flask import current_app
+
+    _oauth = OAuth(current_app)
+    _oauth.register(
+        name="google",
+        client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+    print("✅ Google OAuth client registered via Authlib")
+    return _oauth
+
 
 @auth_bp.route("/auth/google/login")
 def google_login():
     """Redirect user to Google's OAuth consent screen."""
-    print("Google Auth Started")
+    print("Google Auth: Login route hit")
 
     client_id = os.getenv("GOOGLE_CLIENT_ID", "")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
 
     if not client_id or not client_secret:
         print("⚠️  Google OAuth not configured — GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing in .env")
-        # Redirect back to home with error param (user navigated here via browser)
         return redirect("/?auth_error=google_not_configured")
 
     try:
-        from google_auth_oauthlib.flow import Flow
+        oauth = _get_oauth()
+        redirect_uri = f"{BASE_URL}/auth/google/callback"
+        print(f"Google Auth: Redirecting to Google consent screen (callback: {redirect_uri})")
+        return oauth.google.authorize_redirect(redirect_uri)
 
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [f"{BASE_URL}/auth/google/callback"],
-                }
-            },
-            scopes=[
-                "openid",
-                "https://www.googleapis.com/auth/userinfo.email",
-                "https://www.googleapis.com/auth/userinfo.profile",
-            ],
-            code_verifier=None
-            
-        )
-        flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
-        
-        print("Redirect URI:", f"{BASE_URL}/auth/google/callback")
-
-        authorization_url, state = flow.authorization_url(
-            access_type="offline",
-            include_granted_scopes="true",
-            prompt="consent",
-        )
-
-        session["google_oauth_state"] = state
-        print("Google Auth: Redirecting to Google consent screen")
-        return redirect(authorization_url)
-
-    except ImportError:
-        print("❌ google-auth-oauthlib not installed. Run: pip install google-auth-oauthlib")
-        return redirect("/?auth_error=google_not_configured")
     except Exception as e:
         print(f"❌ Google Auth setup error: {e}")
+        import traceback
+        traceback.print_exc()
         return redirect("/?auth_error=google_failed")
 
 
@@ -290,13 +285,6 @@ def google_login():
 def google_callback():
     """Handle Google OAuth callback."""
     print("Google Auth: Callback received")
-
-    try:
-        import requests as http_requests
-        from google_auth_oauthlib.flow import Flow
-    except ImportError:
-        print("❌ google-auth-oauthlib or requests not installed")
-        return redirect("/?auth_error=google_failed")
 
     client_id = os.getenv("GOOGLE_CLIENT_ID", "")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -306,54 +294,36 @@ def google_callback():
         return redirect("/?auth_error=google_not_configured")
 
     try:
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [f"{BASE_URL}/auth/google/callback"],
-                }
-            },
-            scopes=[
-                "openid",
-                "https://www.googleapis.com/auth/userinfo.email",
-                "https://www.googleapis.com/auth/userinfo.profile",
-            ],
-            state=session.get("google_oauth_state"),
-            code_verifier=None
-            
-        )
-        flow.redirect_uri = f"{BASE_URL}/auth/google/callback"
-        
-        print("Redirect URI:", f"{BASE_URL}/auth/google/callback")
-        # Exchange the authorization code for tokens
-        flow.fetch_token(authorization_response=request.url)
+        oauth = _get_oauth()
 
-        # Get user info from Google
-        credentials = flow.credentials
-        userinfo_response = http_requests.get(
-            "https://www.googleapis.com/oauth2/v3/userinfo",
-            headers={"Authorization": f"Bearer {credentials.token}"},
-        )
-        userinfo = userinfo_response.json()
+        # Exchange authorization code for token (Authlib handles this cleanly)
+        token = oauth.google.authorize_access_token()
+        print("Google Auth: Token exchange successful")
+
+        # Extract user info from the ID token (OpenID Connect)
+        userinfo = token.get("userinfo")
+        if not userinfo:
+            # Fallback: fetch from userinfo endpoint
+            print("Google Auth: No userinfo in token, fetching from endpoint")
+            userinfo = oauth.google.userinfo()
 
         google_id = userinfo.get("sub")
-        email = userinfo.get("email", "").lower()
-        name = userinfo.get("name", email.split("@")[0])
+        email = (userinfo.get("email") or "").lower()
+        name = userinfo.get("name") or email.split("@")[0]
 
         if not google_id or not email:
-            print("❌ Google Auth: Missing user info from Google")
+            print(f"❌ Google Auth: Missing user info — sub={google_id}, email={email}")
             return redirect("/?auth_error=google_failed")
 
-        print(f"Google Auth: User info received — {email}")
+        print(f"Google Auth: User info received — {email} (sub: {google_id})")
 
     except Exception as e:
         print(f"❌ Google Auth token exchange error: {e}")
+        import traceback
+        traceback.print_exc()
         return redirect("/?auth_error=google_failed")
 
-    # Check if user already exists
+    # --- Database logic (preserved exactly from original) ---
     conn = get_conn()
     try:
         cur = conn.cursor()
@@ -392,16 +362,18 @@ def google_callback():
         conn.commit()
         cur.close()
 
-        # Set session
+        # Set session (preserved exactly)
         session["user_id"] = user_id
         session["username"] = username
 
-        print("Google Auth Success")
+        print(f"Google Auth: ✅ Success — user '{username}' (ID: {user_id}) logged in")
         return redirect("/")
 
     except Exception as e:
         conn.rollback()
-        print(f"❌ Google auth DB error: {e}")
+        print(f"❌ Google Auth DB error: {e}")
+        import traceback
+        traceback.print_exc()
         return redirect("/?auth_error=google_failed")
     finally:
         put_conn(conn)

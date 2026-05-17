@@ -740,11 +740,6 @@ def api_recommendations():
         put_conn(conn)
 
 
-# =============================================================================
-# ALLOW INSECURE TRANSPORT (dev only — needed for Google OAuth without HTTPS)
-# =============================================================================
-if "RENDER" not in os.environ:
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
 
 # =============================================================================
