@@ -8,11 +8,10 @@ import re
 import secrets
 import hashlib
 import random
-import smtplib
 from datetime import datetime, timedelta
-from email.message import EmailMessage
 
-from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template
+from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template, current_app
+from flask_mail import Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
@@ -57,42 +56,52 @@ def _validate_password(password):
 
 
 # ---------------------------------------------------------------------------
-# EMAIL SENDER — Generic SMTP helper for all email types
+# EMAIL SENDER — Flask-Mail (replaces raw smtplib to prevent worker crashes)
 # ---------------------------------------------------------------------------
 def _send_email(to_email, subject, body_text):
-    """Send an email via SMTP (Gmail). Returns True on success."""
+    """Send an email via Flask-Mail (Gmail SMTP with timeout).
+
+    Uses Flask-Mail instead of raw smtplib because:
+    - Flask-Mail respects MAIL_TIMEOUT (30s), preventing indefinite blocking
+    - Raw smtplib.SMTP() has no timeout by default, which causes Gunicorn
+      workers to hang on DNS/connection issues until they get SIGKILL'd
+    - Flask-Mail handles TLS negotiation and connection reuse safely
+
+    Returns True on success, False on any failure (never raises).
+    """
     print(f"📧 Sending email to: {to_email} — Subject: {subject}")
 
-    email_user = os.getenv("EMAIL_USER", "")
-    email_pass = os.getenv("EMAIL_PASS", "")
-
-    if not email_user or not email_pass:
-        print("⚠️  EMAIL_USER / EMAIL_PASS not set in .env — cannot send email")
-        return False
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = email_user
-    msg["To"] = to_email
-    msg.set_content(body_text)
-
     try:
-        print(f"Connecting to smtp.gmail.com:587 (TLS) as {email_user}")
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(email_user, email_pass)
-            server.send_message(msg)
+        mail = current_app.extensions.get('mail')
+        if not mail:
+            print("⚠️  Flask-Mail not initialized — cannot send email")
+            return False
+
+        sender = current_app.config.get('MAIL_USERNAME', '')
+        if not sender:
+            print("⚠️  MAIL_USERNAME (EMAIL_USER) not configured — cannot send email")
+            return False
+
+        msg = Message(
+            subject=subject,
+            recipients=[to_email],
+            body=body_text,
+            sender=sender,
+        )
+
+        print(f"📤 Sending via Flask-Mail (smtp.gmail.com:587, TLS, timeout=30s)")
+        mail.send(msg)
         print(f"✅ Email sent successfully to: {to_email}")
         return True
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"❌ Email authentication failed: {e}")
-        print("   Check EMAIL_USER and EMAIL_PASS in .env (use App Password for Gmail)")
+
+    except TimeoutError:
+        print(f"❌ Email timeout — SMTP connection to smtp.gmail.com timed out (30s)")
         return False
-    except smtplib.SMTPException as e:
-        print(f"❌ SMTP error sending email: {e}")
+    except ConnectionError as e:
+        print(f"❌ Email connection error: {e}")
         return False
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"❌ Email send failed: {type(e).__name__}: {e}")
         return False
 
 
