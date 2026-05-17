@@ -3689,3 +3689,53 @@ td.action-cell {
     text-align: center;
     padding: 8px !important;
 }
+
+
+/* ===================================================================
+   PASSWORD POLICY CHECKLIST — Real-time strength indicator
+   =================================================================== */
+
+.pw-policy-checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 14px;
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid rgba(100, 140, 220, 0.08);
+    border-radius: 10px;
+    margin-top: -6px;
+}
+
+.pw-rule {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: color 0.25s ease;
+}
+
+.pw-rule-icon {
+    font-size: 13px;
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    transition: color 0.25s ease;
+}
+
+.pw-rule.pw-rule-pass {
+    color: var(--accent-green, #34d399);
+}
+
+.pw-rule.pw-rule-pass .pw-rule-icon {
+    color: var(--accent-green, #34d399);
+}
+
+.pw-rule.pw-rule-fail {
+    color: var(--text-muted);
+}
+
+.pw-rule.pw-rule-fail .pw-rule-icon {
+    color: var(--text-muted);
+}

@@ -1,6 +1,7 @@
 /* ==========================================================================
    AUTH.JS — Authentication modal, form handling, user menu, save startups,
-             recommendations, forgot password, show/hide password
+             recommendations, forgot password, show/hide password,
+             password policy validation, email verification
    ========================================================================== */
 
 // =============================================================================
@@ -18,6 +19,78 @@ function togglePasswordField(inputId, btn) {
         btn.classList.remove('active');
     }
 }
+
+
+// =============================================================================
+// PASSWORD POLICY — Real-time strength checker
+// =============================================================================
+
+var _PW_RULES = [
+    { id: 'length',    regex: /.{8,}/,              label: 'At least 8 characters' },
+    { id: 'uppercase', regex: /[A-Z]/,              label: 'At least 1 uppercase letter' },
+    { id: 'lowercase', regex: /[a-z]/,              label: 'At least 1 lowercase letter' },
+    { id: 'number',    regex: /[0-9]/,              label: 'At least 1 number' },
+    { id: 'special',   regex: /[!@#$%^&*()_+\-=]/, label: 'At least 1 special character' },
+];
+
+/**
+ * Check password against policy rules.
+ * @returns {string[]} Array of failed rule labels (empty = all passed)
+ */
+function _checkPasswordPolicy(password) {
+    var failures = [];
+    _PW_RULES.forEach(function (rule) {
+        if (!rule.regex.test(password)) {
+            failures.push(rule.label.toLowerCase());
+        }
+    });
+    return failures;
+}
+
+/**
+ * Update a password policy checklist UI in real-time.
+ * @param {string} password - Current password value
+ * @param {string} containerId - ID of the .pw-policy-checklist container
+ */
+function _updatePolicyChecklist(password, containerId) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+
+    _PW_RULES.forEach(function (rule) {
+        var el = container.querySelector('[data-rule="' + rule.id + '"]');
+        if (!el) return;
+        var icon = el.querySelector('.pw-rule-icon');
+        var passed = rule.regex.test(password);
+
+        if (passed) {
+            el.classList.add('pw-rule-pass');
+            el.classList.remove('pw-rule-fail');
+            if (icon) icon.textContent = '\u2713';  // checkmark
+        } else {
+            el.classList.remove('pw-rule-pass');
+            el.classList.add('pw-rule-fail');
+            if (icon) icon.textContent = '\u25cb';  // circle
+        }
+    });
+}
+
+// Wire up real-time checklist for signup password field
+document.addEventListener('DOMContentLoaded', function () {
+    var signupPw = document.getElementById('signupPassword');
+    if (signupPw) {
+        signupPw.addEventListener('input', function () {
+            _updatePolicyChecklist(signupPw.value, 'signupPwPolicy');
+        });
+    }
+
+    // Also wire for reset password page (if present)
+    var resetPw = document.getElementById('resetPassword');
+    if (resetPw) {
+        resetPw.addEventListener('input', function () {
+            _updatePolicyChecklist(resetPw.value, 'resetPwPolicy');
+        });
+    }
+});
 
 
 // =============================================================================
@@ -223,8 +296,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 errorEl.style.display = 'block';
                 return;
             }
-            if (password.length < 6) {
-                errorEl.textContent = 'Password must be at least 6 characters';
+
+            // Strong password policy
+            var pwErrors = _checkPasswordPolicy(password);
+            if (pwErrors.length > 0) {
+                errorEl.textContent = 'Password requires: ' + pwErrors.join(', ');
                 errorEl.style.display = 'block';
                 return;
             }

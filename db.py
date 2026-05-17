@@ -190,6 +190,13 @@ def _init_postgres(conn):
         ("google_id", "VARCHAR(255) UNIQUE"),
         ("reset_token", "VARCHAR(255)"),
         ("token_expiry", "TIMESTAMP"),
+        ("is_verified", "BOOLEAN DEFAULT FALSE"),
+        ("verification_token", "VARCHAR(255)"),
+        ("verification_expiry", "TIMESTAMP"),
+        ("otp_hash", "VARCHAR(255)"),
+        ("otp_expiry", "TIMESTAMP"),
+        ("otp_attempts", "INTEGER DEFAULT 0"),
+        ("otp_last_sent", "TIMESTAMP"),
     ]:
         cur.execute(f"""
             DO $$
@@ -248,14 +255,21 @@ def _init_sqlite(conn):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            username      TEXT NOT NULL,
-            email         TEXT NOT NULL UNIQUE,
-            password_hash TEXT,
-            google_id     TEXT UNIQUE,
-            reset_token   TEXT,
-            token_expiry  TIMESTAMP,
-            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            username            TEXT NOT NULL,
+            email               TEXT NOT NULL UNIQUE,
+            password_hash       TEXT,
+            google_id           TEXT UNIQUE,
+            reset_token         TEXT,
+            token_expiry        TIMESTAMP,
+            is_verified         BOOLEAN DEFAULT 0,
+            verification_token  TEXT,
+            verification_expiry TIMESTAMP,
+            otp_hash            TEXT,
+            otp_expiry          TIMESTAMP,
+            otp_attempts        INTEGER DEFAULT 0,
+            otp_last_sent       TIMESTAMP,
+            created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 

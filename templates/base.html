@@ -158,7 +158,7 @@
                     <label class="auth-label" for="signupPassword">Password</label>
                     <div class="auth-input-wrapper">
                         <svg class="auth-input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-                        <input class="auth-input" type="password" id="signupPassword" placeholder="Min 6 characters" required autocomplete="new-password" minlength="6">
+                        <input class="auth-input" type="password" id="signupPassword" placeholder="Min 8 characters" required autocomplete="new-password" minlength="8">
                         <button type="button" class="password-toggle-btn" onclick="togglePasswordField('signupPassword', this)" aria-label="Show password">
                             <svg class="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -166,6 +166,14 @@
                             </svg>
                         </button>
                     </div>
+                </div>
+                <!-- Password Strength Checklist -->
+                <div class="pw-policy-checklist" id="signupPwPolicy">
+                    <div class="pw-rule" data-rule="length"><span class="pw-rule-icon">○</span> At least 8 characters</div>
+                    <div class="pw-rule" data-rule="uppercase"><span class="pw-rule-icon">○</span> At least 1 uppercase letter</div>
+                    <div class="pw-rule" data-rule="lowercase"><span class="pw-rule-icon">○</span> At least 1 lowercase letter</div>
+                    <div class="pw-rule" data-rule="number"><span class="pw-rule-icon">○</span> At least 1 number</div>
+                    <div class="pw-rule" data-rule="special"><span class="pw-rule-icon">○</span> At least 1 special character</div>
                 </div>
                 <div class="auth-error" id="signupError"></div>
                 <button class="auth-submit-btn" type="submit" id="signupSubmitBtn">
