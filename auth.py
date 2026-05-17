@@ -56,52 +56,69 @@ def _validate_password(password):
 
 
 # ---------------------------------------------------------------------------
-# EMAIL SENDER — Flask-Mail (replaces raw smtplib to prevent worker crashes)
+# EMAIL SENDER — Direct SMTP with EXPLICIT timeout (Flask-Mail 0.10.0 ignores MAIL_TIMEOUT)
 # ---------------------------------------------------------------------------
 def _send_email(to_email, subject, body_text):
-    """Send an email via Flask-Mail (Gmail SMTP with timeout).
+    """Send an email via Gmail SMTP with a hard 20-second timeout.
 
-    Uses Flask-Mail instead of raw smtplib because:
-    - Flask-Mail respects MAIL_TIMEOUT (30s), preventing indefinite blocking
-    - Raw smtplib.SMTP() has no timeout by default, which causes Gunicorn
-      workers to hang on DNS/connection issues until they get SIGKILL'd
-    - Flask-Mail handles TLS negotiation and connection reuse safely
+    Why not Flask-Mail's mail.send()?
+    Flask-Mail 0.10.0 calls smtplib.SMTP(server, port) WITHOUT a timeout
+    parameter in its configure_host() method. MAIL_TIMEOUT is silently
+    ignored. This means SMTP connections can hang indefinitely, causing
+    Gunicorn to SIGKILL the worker on Render.
+
+    This function uses smtplib directly but with:
+    - timeout=20 on the SMTP constructor (connection-level timeout)
+    - Full try/except to guarantee no crash, no hang
+    - Immediate cleanup via context manager
 
     Returns True on success, False on any failure (never raises).
     """
+    import smtplib
+    from email.mime.text import MIMEText
+
     print(f"📧 Sending email to: {to_email} — Subject: {subject}")
 
     try:
-        mail = current_app.extensions.get('mail')
-        if not mail:
-            print("⚠️  Flask-Mail not initialized — cannot send email")
+        email_user = current_app.config.get('MAIL_USERNAME', '') or os.getenv('EMAIL_USER', '')
+        email_pass = current_app.config.get('MAIL_PASSWORD', '') or os.getenv('EMAIL_PASS', '')
+
+        if not email_user or not email_pass:
+            print("⚠️  EMAIL_USER / EMAIL_PASS not configured — cannot send email")
             return False
 
-        sender = current_app.config.get('MAIL_USERNAME', '')
-        if not sender:
-            print("⚠️  MAIL_USERNAME (EMAIL_USER) not configured — cannot send email")
-            return False
+        # Build message
+        msg = MIMEText(body_text, 'plain', 'utf-8')
+        msg['Subject'] = subject
+        msg['From'] = email_user
+        msg['To'] = to_email
 
-        msg = Message(
-            subject=subject,
-            recipients=[to_email],
-            body=body_text,
-            sender=sender,
-        )
+        # Connect with EXPLICIT 20-second timeout (the critical fix)
+        print(f"📤 Connecting to smtp.gmail.com:587 (TLS, timeout=20s)")
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=20)
+        try:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(email_user, email_pass)
+            server.sendmail(email_user, [to_email], msg.as_string())
+            print(f"✅ Email sent successfully to: {to_email}")
+            return True
+        finally:
+            try:
+                server.quit()
+            except Exception:
+                pass
 
-        print(f"📤 Sending via Flask-Mail (smtp.gmail.com:587, TLS, timeout=30s)")
-        mail.send(msg)
-        print(f"✅ Email sent successfully to: {to_email}")
-        return True
-
-    except TimeoutError:
-        print(f"❌ Email timeout — SMTP connection to smtp.gmail.com timed out (30s)")
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"❌ SMTP auth failed: {e}")
+        print("   → Check EMAIL_USER and EMAIL_PASS (use Gmail App Password)")
         return False
-    except ConnectionError as e:
-        print(f"❌ Email connection error: {e}")
+    except (TimeoutError, smtplib.SMTPServerDisconnected, ConnectionError, OSError) as e:
+        print(f"❌ SMTP connection failed ({type(e).__name__}): {e}")
         return False
     except Exception as e:
-        print(f"❌ Email send failed: {type(e).__name__}: {e}")
+        print(f"❌ Email send failed ({type(e).__name__}): {e}")
         return False
 
 
