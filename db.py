@@ -240,6 +240,21 @@ def _init_postgres(conn):
             END $$;
         """)
 
+    # ---- Pending Signups table (OTP verification before account creation) ----
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pending_signups (
+            id            SERIAL PRIMARY KEY,
+            username      VARCHAR(80) NOT NULL,
+            email         VARCHAR(120) NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            otp_hash      VARCHAR(255) NOT NULL,
+            otp_expiry    TIMESTAMP NOT NULL,
+            otp_attempts  INTEGER DEFAULT 0,
+            otp_last_sent TIMESTAMP,
+            created_at    TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
     conn.commit()
     cur.close()
     print("✅ Database tables initialized (PostgreSQL)")
@@ -282,6 +297,20 @@ def _init_sqlite(conn):
             country      TEXT,
             funding      REAL DEFAULT 0,
             created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pending_signups (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT NOT NULL,
+            email         TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            otp_hash      TEXT NOT NULL,
+            otp_expiry    TIMESTAMP NOT NULL,
+            otp_attempts  INTEGER DEFAULT 0,
+            otp_last_sent TIMESTAMP,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 

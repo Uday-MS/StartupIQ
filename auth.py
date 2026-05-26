@@ -198,8 +198,8 @@ StartupIQ Team
 # OTP HELPERS
 # ---------------------------------------------------------------------------
 def _generate_otp():
-    """Generate a 6-digit numeric OTP."""
-    return str(random.randint(100000, 999999))
+    """Generate a 6-digit numeric OTP using cryptographic randomness."""
+    return str(secrets.SystemRandom().randint(100000, 999999))
 
 
 def _hash_otp(otp_code):
@@ -209,11 +209,32 @@ def _hash_otp(otp_code):
 
 
 # ---------------------------------------------------------------------------
-# SIGNUP — POST /signup
+# CLEANUP — Remove expired pending signups (>30 min old)
+# ---------------------------------------------------------------------------
+def _cleanup_expired_pending_signups(conn):
+    """Remove pending signups older than 30 minutes."""
+    try:
+        cur = conn.cursor()
+        cutoff = datetime.utcnow() - timedelta(minutes=30)
+        cur.execute("DELETE FROM pending_signups WHERE created_at < %s", (cutoff,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        if deleted > 0:
+            print(f"Signup OTP: Cleanup — removed {deleted} expired pending signups")
+    except Exception as e:
+        print(f"Signup OTP: Cleanup warning — {e}")
+
+
+# ---------------------------------------------------------------------------
+# SIGNUP — POST /signup (OTP-gated: no account created until OTP verified)
 # ---------------------------------------------------------------------------
 @auth_bp.route("/signup", methods=["POST"])
 def signup():
-    """Create a new user account with email verification."""
+    """Initiate signup: validate inputs, store in pending_signups, send OTP.
+
+    The user account is NOT created until OTP verification succeeds.
+    """
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "Invalid JSON payload"}), 400
@@ -237,50 +258,280 @@ def signup():
     if errors:
         return jsonify({"error": "; ".join(errors)}), 400
 
-    # --- Store in DB ---
     conn = get_conn()
     try:
+        # Cleanup expired pending signups first
+        _cleanup_expired_pending_signups(conn)
+
         cur = conn.cursor()
 
-        # Check for duplicate email
+        # Check if email already exists as a verified user
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
             cur.close()
             return jsonify({"error": "An account with this email already exists"}), 409
 
-        # Hash password and generate verification token
+        # Hash password
         pw_hash = generate_password_hash(password, method="pbkdf2:sha256")
-        verification_token = secrets.token_urlsafe(32)
-        verification_expiry = datetime.utcnow() + timedelta(hours=24)
 
-        cur.execute(
-            """INSERT INTO users (username, email, password_hash, is_verified,
-               verification_token, verification_expiry)
-               VALUES (%s, %s, %s, FALSE, %s, %s) RETURNING id""",
-            (username, email, pw_hash, verification_token, verification_expiry),
-        )
-        user_id = cur.fetchone()[0]
+        # Generate OTP
+        otp_code = _generate_otp()
+        otp_hash = _hash_otp(otp_code)
+        otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+        now = datetime.utcnow()
+
+        # Upsert into pending_signups (update if email already pending)
+        # First try to find an existing pending signup for this email
+        cur.execute("SELECT id, otp_last_sent FROM pending_signups WHERE email = %s", (email,))
+        existing = cur.fetchone()
+
+        if existing:
+            pending_id, otp_last_sent = existing
+            # Enforce 60s cooldown on resends
+            if otp_last_sent:
+                elapsed = (datetime.utcnow() - otp_last_sent).total_seconds()
+                if elapsed < 60:
+                    remaining = int(60 - elapsed)
+                    cur.close()
+                    print(f"Signup OTP: Cooldown active for {email} — {remaining}s remaining")
+                    return jsonify({
+                        "error": f"Please wait {remaining} seconds before trying again.",
+                        "cooldown": remaining,
+                    }), 429
+
+            # Update existing pending signup
+            cur.execute(
+                """UPDATE pending_signups
+                   SET username = %s, password_hash = %s, otp_hash = %s,
+                       otp_expiry = %s, otp_attempts = 0, otp_last_sent = %s
+                   WHERE id = %s""",
+                (username, pw_hash, otp_hash, otp_expiry, now, pending_id),
+            )
+            print(f"Signup OTP: Updated pending signup for {email}")
+        else:
+            # Insert new pending signup
+            cur.execute(
+                """INSERT INTO pending_signups
+                   (username, email, password_hash, otp_hash, otp_expiry, otp_attempts, otp_last_sent)
+                   VALUES (%s, %s, %s, %s, %s, 0, %s)""",
+                (username, email, pw_hash, otp_hash, otp_expiry, now),
+            )
+            print(f"Signup OTP: Created pending signup for {email}")
+
         conn.commit()
         cur.close()
 
-        # Set session (allow usage while unverified)
-        session["user_id"] = user_id
-        session["username"] = username
+        # Send OTP email
+        email_sent = _send_otp_email(email, otp_code)
+        print(f"Signup OTP: Generated for {email} — sent: {email_sent}")
 
-        # Send verification email (non-blocking — signup succeeds even if email fails)
-        email_sent = _send_verification_email(email, verification_token)
-        print(f"Signup: User '{username}' (ID: {user_id}) created. Verification email sent: {email_sent}")
-
-        return jsonify({
-            "success": True,
-            "message": "Account created successfully! Please check your email to verify your account.",
-            "user": {"id": user_id, "username": username, "email": email},
-            "verification_email_sent": email_sent,
-        }), 201
-
+        if email_sent:
+            return jsonify({
+                "success": True,
+                "otp_required": True,
+                "email": email,
+                "message": "Verification code sent to your email.",
+            }), 200
+        else:
+            return jsonify({
+                "error": "Failed to send verification code. Please try again.",
+            }), 500
 
     except Exception as e:
         conn.rollback()
+        print(f"❌ Signup OTP error: {e}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+    finally:
+        put_conn(conn)
+
+
+# ---------------------------------------------------------------------------
+# VERIFY SIGNUP OTP — POST /auth/verify-signup-otp
+# ---------------------------------------------------------------------------
+@auth_bp.route("/auth/verify-signup-otp", methods=["POST"])
+def verify_signup_otp():
+    """Verify OTP for a pending signup, then create the user account.
+
+    This is the ONLY path that creates a user from email signup.
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    email = (data.get("email") or "").strip().lower()
+    otp_code = (data.get("otp") or "").strip()
+
+    if not email or not otp_code:
+        return jsonify({"error": "Email and verification code are required"}), 400
+
+    if not otp_code.isdigit() or len(otp_code) != 6:
+        return jsonify({"error": "Code must be a 6-digit number"}), 400
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+
+        # Look up pending signup
+        cur.execute(
+            """SELECT id, username, password_hash, otp_hash, otp_expiry, otp_attempts
+               FROM pending_signups WHERE email = %s""",
+            (email,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            cur.close()
+            print(f"Signup OTP: ❌ No pending signup found for {email}")
+            return jsonify({"error": "No pending signup found. Please sign up again."}), 404
+
+        pending_id, username, pw_hash, stored_hash, otp_expiry, otp_attempts = row
+
+        # Check brute force (max 5 attempts)
+        if otp_attempts and otp_attempts >= 5:
+            print(f"Signup OTP: ❌ Too many attempts for {email}")
+            # Clear the pending signup OTP to force resend
+            cur.execute(
+                "UPDATE pending_signups SET otp_hash = '', otp_expiry = %s, otp_attempts = 0 WHERE id = %s",
+                (datetime.utcnow(), pending_id),
+            )
+            conn.commit()
+            cur.close()
+            return jsonify({"error": "Too many failed attempts. Please request a new code."}), 429
+
+        # Check expiry
+        if not otp_expiry or datetime.utcnow() > otp_expiry:
+            print(f"Signup OTP: ❌ Expired for {email}")
+            cur.close()
+            return jsonify({"error": "Code has expired. Please request a new one."}), 400
+
+        # Check hash
+        if not stored_hash or _hash_otp(otp_code) != stored_hash:
+            # Increment attempts
+            new_attempts = (otp_attempts or 0) + 1
+            cur.execute(
+                "UPDATE pending_signups SET otp_attempts = %s WHERE id = %s",
+                (new_attempts, pending_id),
+            )
+            conn.commit()
+            cur.close()
+            remaining = 5 - new_attempts
+            print(f"Signup OTP: ❌ Invalid code for {email} — {remaining} attempts remaining")
+            return jsonify({
+                "error": f"Invalid code. {remaining} attempt(s) remaining.",
+                "attempts_remaining": remaining,
+            }), 401
+
+        # ✅ OTP is valid — CREATE THE USER ACCOUNT
+        # Double-check no user with this email was created in the meantime
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        if cur.fetchone():
+            # User already exists (race condition or duplicate signup)
+            cur.execute("DELETE FROM pending_signups WHERE id = %s", (pending_id,))
+            conn.commit()
+            cur.close()
+            print(f"Signup OTP: User already exists for {email} — cleaned up pending signup")
+            return jsonify({"error": "An account with this email already exists. Please login."}), 409
+
+        # Create the user
+        cur.execute(
+            """INSERT INTO users (username, email, password_hash, is_verified)
+               VALUES (%s, %s, %s, TRUE) RETURNING id""",
+            (username, email, pw_hash),
+        )
+        user_id = cur.fetchone()[0]
+
+        # Delete the pending signup
+        cur.execute("DELETE FROM pending_signups WHERE id = %s", (pending_id,))
+        conn.commit()
+        cur.close()
+
+        # Set session
+        session["user_id"] = user_id
+        session["username"] = username
+
+        print(f"Signup OTP: ✅ Verified for {email} — user '{username}' created (ID: {user_id})")
+        return jsonify({
+            "success": True,
+            "message": f"Welcome to StartupIQ, {username}!",
+            "user": {"id": user_id, "username": username, "email": email},
+        }), 201
+
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Signup OTP verification error: {e}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+    finally:
+        put_conn(conn)
+
+
+# ---------------------------------------------------------------------------
+# RESEND SIGNUP OTP — POST /auth/resend-signup-otp
+# ---------------------------------------------------------------------------
+@auth_bp.route("/auth/resend-signup-otp", methods=["POST"])
+def resend_signup_otp():
+    """Resend OTP for a pending signup with cooldown enforcement."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    email = (data.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify({"error": "Valid email is required"}), 400
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, otp_last_sent FROM pending_signups WHERE email = %s",
+            (email,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            cur.close()
+            # Don't reveal whether pending signup exists
+            return jsonify({"success": True, "message": "If a pending signup exists, a new code has been sent."})
+
+        pending_id, otp_last_sent = row
+
+        # Enforce 60s cooldown
+        if otp_last_sent:
+            elapsed = (datetime.utcnow() - otp_last_sent).total_seconds()
+            if elapsed < 60:
+                remaining = int(60 - elapsed)
+                cur.close()
+                print(f"Signup OTP: Resend cooldown for {email} — {remaining}s remaining")
+                return jsonify({
+                    "error": f"Please wait {remaining} seconds before requesting a new code.",
+                    "cooldown": remaining,
+                }), 429
+
+        # Generate new OTP
+        otp_code = _generate_otp()
+        otp_hash = _hash_otp(otp_code)
+        otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+
+        cur.execute(
+            """UPDATE pending_signups
+               SET otp_hash = %s, otp_expiry = %s, otp_attempts = 0, otp_last_sent = %s
+               WHERE id = %s""",
+            (otp_hash, otp_expiry, datetime.utcnow(), pending_id),
+        )
+        conn.commit()
+        cur.close()
+
+        # Send OTP email
+        email_sent = _send_otp_email(email, otp_code)
+        print(f"Signup OTP: Resend for {email} — sent: {email_sent}")
+
+        if email_sent:
+            return jsonify({"success": True, "message": "New verification code sent to your email."})
+        else:
+            return jsonify({"error": "Failed to send verification code. Please try again."}), 500
+
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Resend signup OTP error: {e}")
         return jsonify({"error": f"Server error: {str(e)}"}), 500
     finally:
         put_conn(conn)

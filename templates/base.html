@@ -222,6 +222,36 @@
                 </button>
             </form>
 
+            <!-- OTP Verification Form (hidden initially, shown after signup) -->
+            <div class="auth-form auth-otp-form" id="otpVerifyForm" style="display:none;">
+                <div class="forgot-header">
+                    <button type="button" class="forgot-back-btn" id="otpBackBtn" aria-label="Back to signup">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+                    </button>
+                    <span class="forgot-title">Verify Your Email</span>
+                </div>
+                <p class="forgot-desc" id="otpDesc">Enter the 6-digit code sent to your email.</p>
+                <div class="otp-input-group" id="otpInputGroup">
+                    <input type="text" class="otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="one-time-code" data-index="0">
+                    <input type="text" class="otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" data-index="1">
+                    <input type="text" class="otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" data-index="2">
+                    <input type="text" class="otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" data-index="3">
+                    <input type="text" class="otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" data-index="4">
+                    <input type="text" class="otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" data-index="5">
+                </div>
+                <div class="auth-error" id="otpError"></div>
+                <div class="auth-success-inline" id="otpSuccess" style="display:none;"></div>
+                <button class="auth-submit-btn" type="button" id="otpSubmitBtn">
+                    <span class="auth-submit-text">Verify & Create Account</span>
+                    <span class="auth-submit-loader" style="display:none;"></span>
+                </button>
+                <div class="otp-resend-row">
+                    <span class="otp-resend-text">Didn't receive the code?</span>
+                    <button type="button" class="otp-resend-btn" id="otpResendBtn">Resend Code</button>
+                    <span class="otp-timer" id="otpTimer" style="display:none;"></span>
+                </div>
+            </div>
+
             <!-- Auth success state -->
             <div class="auth-success" id="authSuccess" style="display:none;">
                 <div class="auth-success-icon">

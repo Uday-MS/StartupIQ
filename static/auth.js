@@ -307,7 +307,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // Show loading
             submitBtn.disabled = true;
-            submitText.textContent = 'Creating account...';
+            submitText.textContent = 'Sending verification code...';
             submitLoader.style.display = 'inline-block';
 
             fetch('/signup', {
@@ -321,7 +321,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     submitText.textContent = 'Create Account';
                     submitLoader.style.display = 'none';
 
-                    if (result.data.success) {
+                    if (result.data.otp_required) {
+                        // OTP flow — show OTP verification form
+                        _showOtpForm(result.data.email);
+                    } else if (result.data.success) {
                         showAuthSuccess('Account created!', result.data.user.username);
                     } else {
                         errorEl.textContent = result.data.error || 'Signup failed';
@@ -507,6 +510,322 @@ document.addEventListener('DOMContentLoaded', function () {
                 submitLoader.style.display = 'none';
                 errorEl.textContent = 'Network error. Please try again.';
                 errorEl.style.display = 'block';
+            });
+        });
+    }
+});
+
+
+// =============================================================================
+// OTP VERIFICATION — Show/hide OTP form, submit, resend, timer
+// =============================================================================
+
+// Stores the pending email during OTP verification step
+var _otpPendingEmail = '';
+var _otpResendTimer = null;
+
+/**
+ * Show the OTP verification form and hide all other auth modal content.
+ * @param {string} email - The email OTP was sent to
+ */
+function _showOtpForm(email) {
+    _otpPendingEmail = email;
+
+    // Hide signup/login forms, tabs, divider, google button
+    var loginForm  = document.getElementById('loginForm');
+    var signupForm = document.getElementById('signupForm');
+    var divider    = document.querySelector('.auth-divider');
+    var googleBtn  = document.getElementById('googleAuthBtn');
+    var tabs       = document.getElementById('authTabs');
+    var forgotForm = document.getElementById('forgotPasswordForm');
+
+    if (loginForm)  loginForm.style.display  = 'none';
+    if (signupForm) signupForm.style.display  = 'none';
+    if (divider)    divider.style.display     = 'none';
+    if (googleBtn)  googleBtn.style.display   = 'none';
+    if (tabs)       tabs.style.display        = 'none';
+    if (forgotForm) forgotForm.style.display  = 'none';
+
+    // Update description with masked email
+    var desc = document.getElementById('otpDesc');
+    if (desc) {
+        var maskedEmail = email.replace(/(.{2}).+(@.+)/, '$1•••$2');
+        desc.textContent = 'Enter the 6-digit code sent to ' + maskedEmail + '. It expires in 10 minutes.';
+    }
+
+    // Clear previous state
+    _clearOtpInputs();
+    var errEl = document.getElementById('otpError');
+    var sucEl = document.getElementById('otpSuccess');
+    if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+    if (sucEl) { sucEl.textContent = ''; sucEl.style.display = 'none'; }
+
+    var submitBtn = document.getElementById('otpSubmitBtn');
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        var txt = submitBtn.querySelector('.auth-submit-text');
+        var ldr = submitBtn.querySelector('.auth-submit-loader');
+        if (txt) txt.textContent = 'Verify & Create Account';
+        if (ldr) ldr.style.display = 'none';
+    }
+
+    // Show OTP form
+    var otpForm = document.getElementById('otpVerifyForm');
+    if (otpForm) otpForm.style.display = 'flex';
+
+    // Start 60s resend cooldown automatically (OTP was just sent)
+    _startOtpResendCooldown(60);
+
+    // Focus first digit
+    setTimeout(function () {
+        var first = document.querySelector('.otp-digit[data-index="0"]');
+        if (first) first.focus();
+    }, 200);
+}
+
+/**
+ * Hide the OTP form and restore the signup tab view.
+ */
+function _hideOtpForm() {
+    var otpForm = document.getElementById('otpVerifyForm');
+    if (otpForm) otpForm.style.display = 'none';
+
+    // Restore signup tab elements
+    var divider  = document.querySelector('.auth-divider');
+    var googleBtn = document.getElementById('googleAuthBtn');
+    var tabs     = document.getElementById('authTabs');
+
+    if (divider)   divider.style.display   = 'flex';
+    if (googleBtn) googleBtn.style.display = 'flex';
+    if (tabs)      tabs.style.display      = 'flex';
+
+    // Clear cooldown timer
+    if (_otpResendTimer) { clearInterval(_otpResendTimer); _otpResendTimer = null; }
+
+    switchAuthTab('signup');
+}
+
+/**
+ * Clear all OTP digit inputs.
+ */
+function _clearOtpInputs() {
+    document.querySelectorAll('.otp-digit').forEach(function (el) {
+        el.value = '';
+        el.classList.remove('otp-digit-filled', 'otp-digit-error');
+    });
+}
+
+/**
+ * Read the current OTP value from the 6 digit inputs.
+ * @returns {string}
+ */
+function _getOtpValue() {
+    var digits = document.querySelectorAll('.otp-digit');
+    var val = '';
+    digits.forEach(function (el) { val += (el.value || ''); });
+    return val;
+}
+
+/**
+ * Start a countdown timer on the resend button.
+ * @param {number} seconds - Seconds to count down
+ */
+function _startOtpResendCooldown(seconds) {
+    var resendBtn = document.getElementById('otpResendBtn');
+    var timerEl   = document.getElementById('otpTimer');
+    if (!resendBtn) return;
+
+    resendBtn.disabled = true;
+    resendBtn.style.opacity = '0.5';
+    if (timerEl) { timerEl.textContent = 'Resend in ' + seconds + 's'; timerEl.style.display = 'inline'; }
+
+    var remaining = seconds;
+    if (_otpResendTimer) clearInterval(_otpResendTimer);
+
+    _otpResendTimer = setInterval(function () {
+        remaining -= 1;
+        if (timerEl) timerEl.textContent = 'Resend in ' + remaining + 's';
+        if (remaining <= 0) {
+            clearInterval(_otpResendTimer);
+            _otpResendTimer = null;
+            resendBtn.disabled = false;
+            resendBtn.style.opacity = '';
+            if (timerEl) timerEl.style.display = 'none';
+        }
+    }, 1000);
+}
+
+// Wire up OTP digit inputs: auto-advance, backspace, paste
+document.addEventListener('DOMContentLoaded', function () {
+    var digits = document.querySelectorAll('.otp-digit');
+
+    digits.forEach(function (input) {
+        // Only allow digits
+        input.addEventListener('keydown', function (e) {
+            // Allow: backspace, delete, tab, arrow keys
+            if (['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) !== -1) {
+                if (e.key === 'Backspace' && !input.value) {
+                    var idx = parseInt(input.dataset.index);
+                    if (idx > 0) {
+                        var prev = document.querySelector('.otp-digit[data-index="' + (idx - 1) + '"]');
+                        if (prev) { prev.value = ''; prev.focus(); }
+                    }
+                }
+                return;
+            }
+            // Block non-digit keys
+            if (!/^[0-9]$/.test(e.key)) {
+                e.preventDefault();
+            }
+        });
+
+        input.addEventListener('input', function () {
+            // Keep only last character entered (handles mobile autofill)
+            var val = input.value.replace(/[^0-9]/g, '');
+            if (val.length > 1) val = val.slice(-1);
+            input.value = val;
+
+            var idx = parseInt(input.dataset.index);
+            if (val && idx < 5) {
+                var next = document.querySelector('.otp-digit[data-index="' + (idx + 1) + '"]');
+                if (next) next.focus();
+            }
+
+            // Remove error styling on new input
+            input.classList.remove('otp-digit-error');
+            var errEl = document.getElementById('otpError');
+            if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+        });
+
+        // Handle paste of full 6-digit code
+        input.addEventListener('paste', function (e) {
+            e.preventDefault();
+            var pasted = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '').slice(0, 6);
+            var allDigits = document.querySelectorAll('.otp-digit');
+            for (var i = 0; i < pasted.length && i < 6; i++) {
+                allDigits[i].value = pasted[i];
+            }
+            // Focus the next empty or last input
+            var focusIdx = Math.min(pasted.length, 5);
+            var focusEl = document.querySelector('.otp-digit[data-index="' + focusIdx + '"]');
+            if (focusEl) focusEl.focus();
+        });
+    });
+
+    // Back button — return to signup tab
+    var otpBackBtn = document.getElementById('otpBackBtn');
+    if (otpBackBtn) {
+        otpBackBtn.addEventListener('click', function () {
+            _hideOtpForm();
+        });
+    }
+
+    // OTP Submit button
+    var otpSubmitBtn = document.getElementById('otpSubmitBtn');
+    if (otpSubmitBtn) {
+        otpSubmitBtn.addEventListener('click', function () {
+            var otp = _getOtpValue();
+            var errEl = document.getElementById('otpError');
+
+            if (otp.length !== 6) {
+                if (errEl) { errEl.textContent = 'Please enter all 6 digits.'; errEl.style.display = 'block'; }
+                // Shake effect on incomplete inputs
+                document.querySelectorAll('.otp-digit').forEach(function (el) {
+                    if (!el.value) el.classList.add('otp-digit-error');
+                });
+                return;
+            }
+
+            var submitText   = otpSubmitBtn.querySelector('.auth-submit-text');
+            var submitLoader = otpSubmitBtn.querySelector('.auth-submit-loader');
+
+            otpSubmitBtn.disabled = true;
+            if (submitText)   submitText.textContent = 'Verifying...';
+            if (submitLoader) submitLoader.style.display = 'inline-block';
+            if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+
+            fetch('/auth/verify-signup-otp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: _otpPendingEmail, otp: otp }),
+            })
+            .then(function (res) { return res.json().then(function (data) { return { status: res.status, data: data }; }); })
+            .then(function (result) {
+                otpSubmitBtn.disabled = false;
+                if (submitText)   submitText.textContent = 'Verify & Create Account';
+                if (submitLoader) submitLoader.style.display = 'none';
+
+                if (result.data.success) {
+                    // Hide OTP form, show success state
+                    var otpForm = document.getElementById('otpVerifyForm');
+                    if (otpForm) otpForm.style.display = 'none';
+                    showAuthSuccess(result.data.message || 'Account created!', result.data.user.username);
+                } else {
+                    if (errEl) { errEl.textContent = result.data.error || 'Verification failed.'; errEl.style.display = 'block'; }
+                    // Mark digits with error styling
+                    document.querySelectorAll('.otp-digit').forEach(function (el) {
+                        el.classList.add('otp-digit-error');
+                    });
+                    // If too many attempts or expired, re-enable resend immediately
+                    if (result.status === 429 || result.status === 400) {
+                        var resendBtn = document.getElementById('otpResendBtn');
+                        var timerEl   = document.getElementById('otpTimer');
+                        if (_otpResendTimer) { clearInterval(_otpResendTimer); _otpResendTimer = null; }
+                        if (resendBtn) { resendBtn.disabled = false; resendBtn.style.opacity = ''; }
+                        if (timerEl)  timerEl.style.display = 'none';
+                    }
+                }
+            })
+            .catch(function () {
+                otpSubmitBtn.disabled = false;
+                if (submitText)   submitText.textContent = 'Verify & Create Account';
+                if (submitLoader) submitLoader.style.display = 'none';
+                if (errEl) { errEl.textContent = 'Network error. Please try again.'; errEl.style.display = 'block'; }
+            });
+        });
+    }
+
+    // OTP Resend button
+    var otpResendBtn = document.getElementById('otpResendBtn');
+    if (otpResendBtn) {
+        otpResendBtn.addEventListener('click', function () {
+            var errEl = document.getElementById('otpError');
+            var sucEl = document.getElementById('otpSuccess');
+            if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+            if (sucEl) { sucEl.textContent = ''; sucEl.style.display = 'none'; }
+
+            otpResendBtn.disabled = true;
+            otpResendBtn.style.opacity = '0.5';
+
+            fetch('/auth/resend-signup-otp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: _otpPendingEmail }),
+            })
+            .then(function (res) { return res.json().then(function (data) { return { status: res.status, data: data }; }); })
+            .then(function (result) {
+                if (result.data.success) {
+                    if (sucEl) { sucEl.textContent = 'New code sent! Check your inbox.'; sucEl.style.display = 'block'; }
+                    _clearOtpInputs();
+                    _startOtpResendCooldown(60);
+                    setTimeout(function () {
+                        var first = document.querySelector('.otp-digit[data-index="0"]');
+                        if (first) first.focus();
+                    }, 100);
+                } else {
+                    otpResendBtn.disabled = false;
+                    otpResendBtn.style.opacity = '';
+                    var cooldown = result.data.cooldown || 0;
+                    if (cooldown > 0) {
+                        _startOtpResendCooldown(cooldown);
+                    }
+                    if (errEl) { errEl.textContent = result.data.error || 'Failed to resend code.'; errEl.style.display = 'block'; }
+                }
+            })
+            .catch(function () {
+                otpResendBtn.disabled = false;
+                otpResendBtn.style.opacity = '';
+                if (errEl) { errEl.textContent = 'Network error. Please try again.'; errEl.style.display = 'block'; }
             });
         });
     }
