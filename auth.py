@@ -11,7 +11,7 @@ import random
 from datetime import datetime, timedelta
 
 from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template, current_app
-from flask_mail import Message
+from email_service import send_otp_email, send_reset_email, send_verification_email
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
@@ -56,142 +56,10 @@ def _validate_password(password):
 
 
 # ---------------------------------------------------------------------------
-# EMAIL SENDER — Direct SMTP with EXPLICIT timeout (Flask-Mail 0.10.0 ignores MAIL_TIMEOUT)
+# EMAIL SENDER — Resend API (replaces Gmail SMTP)
+# All email functions are in email_service.py
+# Imported at top: send_otp_email, send_reset_email, send_verification_email
 # ---------------------------------------------------------------------------
-def _send_email(to_email, subject, body_text):
-    """Send an email via Gmail SMTP with a hard 20-second timeout.
-
-    Why not Flask-Mail's mail.send()?
-    Flask-Mail 0.10.0 calls smtplib.SMTP(server, port) WITHOUT a timeout
-    parameter in its configure_host() method. MAIL_TIMEOUT is silently
-    ignored. This means SMTP connections can hang indefinitely, causing
-    Gunicorn to SIGKILL the worker on Render.
-
-    This function uses smtplib directly but with:
-    - timeout=20 on the SMTP constructor (connection-level timeout)
-    - Full try/except to guarantee no crash, no hang
-    - Immediate cleanup via context manager
-
-    Returns True on success, False on any failure (never raises).
-    """
-    import smtplib
-    from email.mime.text import MIMEText
-
-    print(f"📧 Sending email to: {to_email} — Subject: {subject}")
-
-    try:
-        email_user = current_app.config.get('MAIL_USERNAME', '') or os.getenv('EMAIL_USER', '')
-        email_pass = current_app.config.get('MAIL_PASSWORD', '') or os.getenv('EMAIL_PASS', '')
-
-        if not email_user or not email_pass:
-            print("⚠️  EMAIL_USER / EMAIL_PASS not configured — cannot send email")
-            return False
-
-        # Build message
-        msg = MIMEText(body_text, 'plain', 'utf-8')
-        msg['Subject'] = subject
-        msg['From'] = email_user
-        msg['To'] = to_email
-
-        # Connect with EXPLICIT 20-second timeout (the critical fix)
-        print(f"📤 Connecting to smtp.gmail.com:587 (TLS, timeout=20s)")
-        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=20)
-        try:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(email_user, email_pass)
-            server.sendmail(email_user, [to_email], msg.as_string())
-            print(f"✅ Email sent successfully to: {to_email}")
-            return True
-        finally:
-            try:
-                server.quit()
-            except Exception:
-                pass
-
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"❌ SMTP auth failed: {e}")
-        print("   → Check EMAIL_USER and EMAIL_PASS (use Gmail App Password)")
-        return False
-    except (TimeoutError, smtplib.SMTPServerDisconnected, ConnectionError, OSError) as e:
-        print(f"❌ SMTP connection failed ({type(e).__name__}): {e}")
-        return False
-    except Exception as e:
-        print(f"❌ Email send failed ({type(e).__name__}): {e}")
-        return False
-
-
-def _send_reset_email(to_email, token):
-    """Send a password-reset email (uses generic sender)."""
-    reset_link = f"{BASE_URL}/reset-password/{token}"
-    return _send_email(
-        to_email,
-        "StartupIQ — Password Reset",
-        f"""\
-Hello,
-
-We received a request to reset your password for StartupIQ.
-
-Click the link below to reset your password:
-
-{reset_link}
-
-This link will expire in 15 minutes.
-
-If you did not request this, please ignore this email.
-
-Regards,
-StartupIQ Team
-""",
-    )
-
-
-def _send_verification_email(to_email, token):
-    """Send an email verification link."""
-    verify_link = f"{BASE_URL}/verify-email/{token}"
-    return _send_email(
-        to_email,
-        "StartupIQ — Verify Your Email",
-        f"""\
-Hello,
-
-Welcome to StartupIQ! Please verify your email address.
-
-Click the link below to verify your account:
-
-{verify_link}
-
-This link will expire in 24 hours.
-
-If you did not create an account, please ignore this email.
-
-Regards,
-StartupIQ Team
-""",
-    )
-
-
-def _send_otp_email(to_email, otp_code):
-    """Send an OTP code via email."""
-    return _send_email(
-        to_email,
-        "StartupIQ — Your Verification Code",
-        f"""\
-Hello,
-
-Your StartupIQ verification code is:
-
-    {otp_code}
-
-This code will expire in 10 minutes.
-
-If you did not request this code, please ignore this email.
-
-Regards,
-StartupIQ Team
-""",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +190,7 @@ def signup():
         cur.close()
 
         # Send OTP email
-        email_sent = _send_otp_email(email, otp_code)
+        email_sent = send_otp_email(email, otp_code)
         print(f"Signup OTP: Generated for {email} — sent: {email_sent}")
 
         if email_sent:
@@ -521,7 +389,7 @@ def resend_signup_otp():
         cur.close()
 
         # Send OTP email
-        email_sent = _send_otp_email(email, otp_code)
+        email_sent = send_otp_email(email, otp_code)
         print(f"Signup OTP: Resend for {email} — sent: {email_sent}")
 
         if email_sent:
@@ -1024,7 +892,7 @@ def forgot_password():
         cur.close()
 
         # Send email
-        email_sent = _send_reset_email(email, token)
+        email_sent = send_reset_email(email, token)
 
         if email_sent:
             return jsonify({
@@ -1232,7 +1100,7 @@ def resend_verification():
         conn.commit()
         cur.close()
 
-        email_sent = _send_verification_email(email, verification_token)
+        email_sent = send_verification_email(email, verification_token)
         print(f"Resend Verification: User {user_id} — email sent: {email_sent}")
 
         if email_sent:
@@ -1306,7 +1174,7 @@ def send_otp():
         cur.close()
 
         # Send OTP email
-        email_sent = _send_otp_email(email, otp_code)
+        email_sent = send_otp_email(email, otp_code)
         print(f"OTP: Generated for user {user_id} — sent: {email_sent}")
 
         if email_sent:

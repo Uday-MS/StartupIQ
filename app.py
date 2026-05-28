@@ -18,21 +18,10 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # =============================================================================
-# FLASK-MAIL CONFIG — Gmail SMTP with TLS (timeout prevents worker kills)
+# NOTE: Email delivery uses Resend API (see email_service.py)
+# Flask-Mail / SMTP is no longer needed — removed to avoid dead dependencies
 # =============================================================================
-from flask_mail import Mail
 
-app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USE_SSL'] = False
-app.config['MAIL_USERNAME'] = os.getenv('EMAIL_USER', '')
-app.config['MAIL_PASSWORD'] = os.getenv('EMAIL_PASS', '')
-app.config['MAIL_DEFAULT_SENDER'] = os.getenv('EMAIL_USER', '')
-app.config['MAIL_TIMEOUT'] = 30  # 30s timeout — prevents Gunicorn SIGKILL
-app.config['MAIL_MAX_EMAILS'] = 5  # Connection reuse limit
-
-mail = Mail(app)
 
 
 # =============================================================================
