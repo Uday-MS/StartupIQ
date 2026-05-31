@@ -222,6 +222,50 @@ alongside existing session fields. Frontend can ignore JWT fields — they are a
 
 ---
 
+# RBAC + Founder/Investor Profiles Architecture
+
+Profile-based RBAC system. Roles are determined by profile existence (not a fixed column).
+
+## Architecture
+
+* Users can optionally be: normal user, founder, investor, or both
+* Roles determined by profile table existence (no enum, no role column)
+* Separate PostgreSQL tables: `founder_profiles`, `investor_profiles`
+* Linked via `user_id → users.id` (UNIQUE foreign key)
+* Each user can have at most one founder profile and one investor profile
+
+## Key Files
+
+* profiles.py — Profile CRUD Blueprint + RBAC helper functions
+* db.py — founder_profiles + investor_profiles table schemas
+* templates/founder_profile.html — Founder profile page
+* templates/investor_profile.html — Investor profile page
+
+## API Routes
+
+* GET/POST/PUT/DELETE /profile/founder — Founder profile CRUD
+* GET/POST/PUT/DELETE /profile/investor — Investor profile CRUD
+* GET /profile/roles — Current user's roles (based on profile existence)
+* GET /founder-profile — Render founder profile page
+* GET /investor-profile — Render investor profile page
+
+## Template Context
+
+The `inject_user()` context processor provides:
+* `current_user.has_founder_profile` — boolean
+* `current_user.has_investor_profile` — boolean
+
+These are used in the navbar dropdown to show dynamic labels.
+
+## Security
+
+* All profile routes require `session["user_id"]`
+* Users can only access/modify their own profiles
+* Ownership validated via user_id WHERE clause
+* Protected routes: /founder-profile, /investor-profile
+
+---
+
 # Existing Environment Variables
 
 Current environment variables include:

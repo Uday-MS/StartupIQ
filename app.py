@@ -36,11 +36,14 @@ init_db()
 from auth import auth_bp
 app.register_blueprint(auth_bp)
 
+from profiles import profiles_bp
+app.register_blueprint(profiles_bp)
+
 
 # =============================================================================
 # ROUTE PROTECTION — Require login for certain pages
 # =============================================================================
-PROTECTED_ROUTES = {"/india", "/search", "/predict"}
+PROTECTED_ROUTES = {"/india", "/search", "/predict", "/founder-profile", "/investor-profile"}
 
 
 @app.before_request
@@ -59,14 +62,31 @@ def check_auth():
 # =============================================================================
 @app.context_processor
 def inject_user():
-    """Make current user available in all templates."""
-    return {
-        "current_user": {
-            "logged_in": "user_id" in session,
-            "username": session.get("username", ""),
-            "user_id": session.get("user_id"),
-        }
+    """Make current user + role flags available in all templates."""
+    user_data = {
+        "logged_in": "user_id" in session,
+        "username": session.get("username", ""),
+        "user_id": session.get("user_id"),
+        "has_founder_profile": False,
+        "has_investor_profile": False,
     }
+
+    if user_data["logged_in"]:
+        from db import get_conn, put_conn
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM founder_profiles WHERE user_id = %s", (user_data["user_id"],))
+            user_data["has_founder_profile"] = cur.fetchone() is not None
+            cur.execute("SELECT id FROM investor_profiles WHERE user_id = %s", (user_data["user_id"],))
+            user_data["has_investor_profile"] = cur.fetchone() is not None
+            cur.close()
+        except Exception:
+            pass
+        finally:
+            put_conn(conn)
+
+    return {"current_user": user_data}
 
 # =============================================================================
 # DATA LOADING — Global dataset

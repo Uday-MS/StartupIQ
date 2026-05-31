@@ -281,6 +281,48 @@ def _init_postgres(conn):
         ON refresh_tokens (user_id);
     """)
 
+    # ---- Founder Profiles table ----
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS founder_profiles (
+            id                SERIAL PRIMARY KEY,
+            user_id           INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            startup_name      VARCHAR(255) NOT NULL,
+            industry          VARCHAR(255),
+            funding_stage     VARCHAR(100),
+            website           VARCHAR(500),
+            location          VARCHAR(255),
+            problem_statement TEXT,
+            solution          TEXT,
+            team_size         INTEGER DEFAULT 1,
+            funding_needed    FLOAT DEFAULT 0,
+            pitch_deck_url    VARCHAR(500),
+            logo_url          VARCHAR(500),
+            bio               TEXT,
+            created_at        TIMESTAMP DEFAULT NOW(),
+            updated_at        TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    # ---- Investor Profiles table ----
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS investor_profiles (
+            id                    SERIAL PRIMARY KEY,
+            user_id               INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            fund_name             VARCHAR(255) NOT NULL,
+            investor_type         VARCHAR(100),
+            investment_min        FLOAT DEFAULT 0,
+            investment_max        FLOAT DEFAULT 0,
+            preferred_industries  TEXT,
+            preferred_stages      TEXT,
+            preferred_locations   TEXT,
+            website               VARCHAR(500),
+            linkedin_url          VARCHAR(500),
+            bio                   TEXT,
+            created_at            TIMESTAMP DEFAULT NOW(),
+            updated_at            TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
     conn.commit()
     cur.close()
     print("✅ Database tables initialized (PostgreSQL)")
@@ -350,6 +392,46 @@ def _init_sqlite(conn):
             is_revoked   BOOLEAN DEFAULT 0,
             created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             revoked_at   TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS founder_profiles (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            startup_name      TEXT NOT NULL,
+            industry          TEXT,
+            funding_stage     TEXT,
+            website           TEXT,
+            location          TEXT,
+            problem_statement TEXT,
+            solution          TEXT,
+            team_size         INTEGER DEFAULT 1,
+            funding_needed    REAL DEFAULT 0,
+            pitch_deck_url    TEXT,
+            logo_url          TEXT,
+            bio               TEXT,
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS investor_profiles (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id               INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            fund_name             TEXT NOT NULL,
+            investor_type         TEXT,
+            investment_min        REAL DEFAULT 0,
+            investment_max        REAL DEFAULT 0,
+            preferred_industries  TEXT,
+            preferred_stages      TEXT,
+            preferred_locations   TEXT,
+            website               TEXT,
+            linkedin_url          TEXT,
+            bio                   TEXT,
+            created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
