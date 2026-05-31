@@ -255,6 +255,32 @@ def _init_postgres(conn):
         );
     """)
 
+    # ---- Refresh Tokens table (JWT refresh token storage) ----
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            id           SERIAL PRIMARY KEY,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash   VARCHAR(255) NOT NULL UNIQUE,
+            device_info  VARCHAR(255),
+            expires_at   TIMESTAMP NOT NULL,
+            is_revoked   BOOLEAN DEFAULT FALSE,
+            created_at   TIMESTAMP DEFAULT NOW(),
+            revoked_at   TIMESTAMP
+        );
+    """)
+
+    # Index for fast token lookups during refresh
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash
+        ON refresh_tokens (token_hash);
+    """)
+
+    # Index for cleanup queries and per-user revocation
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id
+        ON refresh_tokens (user_id);
+    """)
+
     conn.commit()
     cur.close()
     print("✅ Database tables initialized (PostgreSQL)")
@@ -311,6 +337,19 @@ def _init_sqlite(conn):
             otp_attempts  INTEGER DEFAULT 0,
             otp_last_sent TIMESTAMP,
             created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash   TEXT NOT NULL UNIQUE,
+            device_info  TEXT,
+            expires_at   TIMESTAMP NOT NULL,
+            is_revoked   BOOLEAN DEFAULT 0,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at   TIMESTAMP
         )
     """)
 

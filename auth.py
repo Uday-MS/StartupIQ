@@ -16,6 +16,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
 from db import get_conn, put_conn
+from jwt_auth import generate_token_pair, rotate_refresh_token, revoke_refresh_token, revoke_all_user_tokens, cleanup_expired_tokens
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 BASE_URL = os.getenv("BASE_URL", "http://localhost:5000")
@@ -317,12 +318,22 @@ def verify_signup_otp():
         session["user_id"] = user_id
         session["username"] = username
 
+        # Generate JWT tokens (additive — session still primary)
+        device_info = request.headers.get("User-Agent", "unknown")[:255]
+        try:
+            token_data = generate_token_pair(user_id, username, conn, device_info)
+        except Exception as jwt_err:
+            print(f"JWT: ⚠️ Token generation failed during signup — {jwt_err}")
+            token_data = {}
+
         print(f"Signup OTP: ✅ Verified for {email} — user '{username}' created (ID: {user_id})")
-        return jsonify({
+        response_data = {
             "success": True,
             "message": f"Welcome to StartupIQ, {username}!",
             "user": {"id": user_id, "username": username, "email": email},
-        }), 201
+        }
+        response_data.update(token_data)
+        return jsonify(response_data), 201
 
     except Exception as e:
         conn.rollback()
@@ -447,11 +458,21 @@ def login():
         session["user_id"] = user_id
         session["username"] = username
 
-        return jsonify({
+        # Generate JWT tokens (additive — session still primary)
+        device_info = request.headers.get("User-Agent", "unknown")[:255]
+        try:
+            token_data = generate_token_pair(user_id, username, conn, device_info)
+        except Exception as jwt_err:
+            print(f"JWT: ⚠️ Token generation failed during login — {jwt_err}")
+            token_data = {}
+
+        response_data = {
             "success": True,
             "message": f"Welcome back, {username}!",
             "user": {"id": user_id, "username": username, "email": email},
-        })
+        }
+        response_data.update(token_data)
+        return jsonify(response_data)
 
     except Exception as e:
         return jsonify({"error": f"Server error: {str(e)}"}), 500
@@ -462,9 +483,31 @@ def login():
 # ---------------------------------------------------------------------------
 # LOGOUT — GET /logout
 # ---------------------------------------------------------------------------
-@auth_bp.route("/logout")
+@auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
-    """Clear session and log the user out."""
+    """Clear session, revoke refresh token, and log the user out."""
+    # Revoke refresh token if provided
+    refresh_token = None
+
+    # Check request body (POST) or session
+    if request.method == "POST":
+        data = request.get_json(silent=True)
+        if data:
+            refresh_token = data.get("refresh_token")
+
+    # Fallback: check session for stored refresh token (Google OAuth flow)
+    if not refresh_token:
+        refresh_token = session.get("jwt_refresh_token")
+
+    if refresh_token:
+        conn = get_conn()
+        try:
+            revoke_refresh_token(refresh_token, conn)
+        except Exception as e:
+            print(f"JWT: ⚠️ Refresh token revocation failed during logout — {e}")
+        finally:
+            put_conn(conn)
+
     session.clear()
     return jsonify({"success": True, "message": "Logged out successfully"})
 
@@ -625,6 +668,15 @@ def google_callback():
         # Set session (preserved exactly)
         session["user_id"] = user_id
         session["username"] = username
+
+        # Generate JWT tokens (stored in session for Google OAuth since it redirects)
+        device_info = request.headers.get("User-Agent", "unknown")[:255]
+        try:
+            token_data = generate_token_pair(user_id, username, conn, device_info)
+            session["jwt_access_token"] = token_data.get("access_token")
+            session["jwt_refresh_token"] = token_data.get("refresh_token")
+        except Exception as jwt_err:
+            print(f"JWT: ⚠️ Token generation failed during Google OAuth — {jwt_err}")
 
         print(f"Google Auth: ✅ Success — user '{username}' (ID: {user_id}) logged in")
         return redirect("/")
@@ -1377,3 +1429,137 @@ def password_policy():
             {"id": "special", "label": "At least 1 special character (!@#$%^&*()_+-=)", "regex": "[!@#$%^&*()_+\\-=]"},
         ]
     })
+
+
+# =============================================================================
+# JWT TOKEN API — Refresh and Revoke endpoints
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# POST /api/token/refresh — Exchange refresh token for new token pair
+# ---------------------------------------------------------------------------
+@auth_bp.route("/api/token/refresh", methods=["POST"])
+def token_refresh():
+    """Exchange a valid refresh token for a new access + refresh token pair.
+
+    Implements token rotation: the old refresh token is invalidated and a new
+    pair is issued. If a revoked token is reused, all tokens for that user
+    are invalidated (replay attack protection).
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    refresh_token = (data.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return jsonify({"error": "refresh_token is required"}), 400
+
+    device_info = request.headers.get("User-Agent", "unknown")[:255]
+
+    conn = get_conn()
+    try:
+        # Clean up expired tokens periodically
+        cleanup_expired_tokens(conn)
+
+        access_token, new_refresh_token, user_id, error = rotate_refresh_token(
+            refresh_token, conn, device_info
+        )
+
+        if error:
+            return jsonify({"error": error}), 401
+
+        return jsonify({
+            "access_token": access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "Bearer",
+            "expires_in": 900,  # 15 minutes in seconds
+        })
+
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Token refresh error: {e}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+    finally:
+        put_conn(conn)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/token/revoke — Revoke a refresh token (logout device)
+# ---------------------------------------------------------------------------
+@auth_bp.route("/api/token/revoke", methods=["POST"])
+def token_revoke():
+    """Revoke a refresh token, effectively logging out that device/session.
+
+    Optionally supports 'revoke_all' to logout all devices.
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    refresh_token = (data.get("refresh_token") or "").strip()
+    revoke_all = data.get("revoke_all", False)
+
+    conn = get_conn()
+    try:
+        if revoke_all:
+            # Require session or JWT to identify the user
+            user_id = session.get("user_id")
+            if not user_id:
+                # Try JWT from Authorization header
+                from jwt_auth import decode_access_token
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    payload = decode_access_token(auth_header[7:])
+                    if payload:
+                        user_id = payload.get("user_id")
+
+            if not user_id:
+                return jsonify({"error": "Authentication required for logout-all"}), 401
+
+            count = revoke_all_user_tokens(user_id, conn)
+            return jsonify({
+                "success": True,
+                "message": f"All sessions revoked ({count} token(s) invalidated)",
+            })
+
+        if not refresh_token:
+            return jsonify({"error": "refresh_token is required"}), 400
+
+        revoked = revoke_refresh_token(refresh_token, conn)
+
+        if revoked:
+            return jsonify({"success": True, "message": "Token revoked"})
+        else:
+            return jsonify({"error": "Token not found or already revoked"}), 404
+
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Token revocation error: {e}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+    finally:
+        put_conn(conn)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/token/status — Check JWT token status (for frontend integration)
+# ---------------------------------------------------------------------------
+@auth_bp.route("/api/token/status")
+def token_status():
+    """Return JWT tokens stored in session (if any).
+
+    Used by frontend to retrieve JWT tokens after Google OAuth redirect.
+    Tokens are cleared from session after retrieval (one-time read).
+    """
+    access_token = session.pop("jwt_access_token", None)
+    refresh_token = session.pop("jwt_refresh_token", None)
+
+    if access_token and refresh_token:
+        return jsonify({
+            "has_tokens": True,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",
+            "expires_in": 900,
+        })
+
+    return jsonify({"has_tokens": False})

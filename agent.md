@@ -176,6 +176,52 @@ These MUST remain compatible.
 
 ---
 
+# JWT + Refresh Token Architecture (Hybrid)
+
+JWT authentication is layered alongside existing session authentication.
+The website continues to use sessions. JWT is available for future API scalability.
+
+## Architecture
+
+* Hybrid model: Session (primary) + JWT (additive)
+* Session authentication remains the primary auth mechanism
+* JWT access tokens (15 min) + refresh tokens (30 days)
+* Refresh tokens stored as SHA-256 hashes in `refresh_tokens` table
+* Token rotation on every refresh (old token invalidated)
+* Replay detection: reuse of revoked token triggers family revocation
+
+## Key Files
+
+* jwt_auth.py — JWT token creation, validation, rotation, revocation
+* auth.py — JWT routes (/api/token/refresh, /api/token/revoke, /api/token/status)
+* db.py — refresh_tokens table schema
+
+## JWT API Routes
+
+* POST /api/token/refresh — exchange refresh token for new pair
+* POST /api/token/revoke — revoke refresh token (single or all)
+* GET /api/token/status — retrieve JWT tokens from session (post-OAuth)
+
+## Token Responses
+
+Login, signup (verify-signup-otp), and Google OAuth responses include JWT tokens
+alongside existing session fields. Frontend can ignore JWT fields — they are additive.
+
+## Environment Variables
+
+* JWT_SECRET_KEY (optional) — separate signing key for JWT
+* Falls back to SECRET_KEY if JWT_SECRET_KEY is not set
+
+## Security
+
+* Access tokens: HS256 signed, 15-min expiry
+* Refresh tokens: secrets.token_urlsafe(64), SHA-256 hashed in DB
+* Token rotation invalidates previous refresh token
+* Revoked token reuse triggers all-token revocation for that user
+* Expired tokens cleaned up periodically
+
+---
+
 # Existing Environment Variables
 
 Current environment variables include:
